@@ -6,7 +6,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from torch.utils.data.sampler import SubsetRandomSampler, WeightedRandomSampler
-from dataloader import IEMOCAPDataset, MELDDataset, EAVDataset
+from dataloader import EAVDataset
 from model import MaskedNLLLoss, LSTMModel, GRUModel, Model, MaskedMSELoss, FocalLoss
 from sklearn.metrics import f1_score, confusion_matrix, accuracy_score, classification_report, precision_recall_fscore_support
 import pandas as pd
@@ -15,9 +15,8 @@ import datetime
 import ipdb
 
 
-seed = 1475 # We use seed = 1475 on IEMOCAP and seed = 67137 on MELD
+seed = 1475 
 def seed_everything(seed=seed):
-    """设置随机种子以确保实验的可重复性"""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -27,72 +26,13 @@ def seed_everything(seed=seed):
     torch.backends.cudnn.deterministic = True
 
 def _init_fn(worker_id):
-    """为每个worker设置随机种子"""
     np.random.seed(int(seed)+worker_id)
 
-def get_train_valid_sampler(trainset, valid=0, dataset='IEMOCAP'):
-    """获取训练和验证的采样器"""
-    size = len(trainset) # 获取训练集的大小
-    idx = list(range(size)) # 创建索引列表
-    split = int(valid*size) # 计算验证集的大小
-    return SubsetRandomSampler(idx[split:]), SubsetRandomSampler(idx[:split])  # 返回训练和验证的采样器
-
-
-def get_MELD_loaders(batch_size=32, valid=0.1, num_workers=0, pin_memory=False):
-    trainset = MELDDataset('MELD_features/MELD_features_raw1.pkl')
-    train_sampler, valid_sampler = get_train_valid_sampler(trainset, valid, 'MELD')
-
-    train_loader = DataLoader(trainset,
-                              batch_size=batch_size,
-                              sampler=train_sampler,
-                              collate_fn=trainset.collate_fn,
-                              num_workers=num_workers,
-                              pin_memory=pin_memory)
-
-    valid_loader = DataLoader(trainset,
-                              batch_size=batch_size,
-                              sampler=valid_sampler,
-                              collate_fn=trainset.collate_fn,
-                              num_workers=num_workers,
-                              pin_memory=pin_memory)
-
-    testset = MELDDataset('MELD_features/MELD_features_raw1.pkl', train=False)
-    test_loader = DataLoader(testset,
-                             batch_size=batch_size,
-                             collate_fn=testset.collate_fn,
-                             num_workers=num_workers,
-                             pin_memory=pin_memory)
-
-    return train_loader, valid_loader, test_loader
-
-
-def get_IEMOCAP_loaders(batch_size=32, valid=0.1, num_workers=0, pin_memory=False):
-    """加载IEMOCAP数据集"""
-    trainset = IEMOCAPDataset() # 初始化训练集
-    train_sampler, valid_sampler = get_train_valid_sampler(trainset, valid) # 获取采样器
-
-    # 创建数据加载器
-    train_loader = DataLoader(trainset,
-                              batch_size=batch_size,
-                              collate_fn=trainset.collate_fn,
-                              num_workers=num_workers,
-                              pin_memory=pin_memory, worker_init_fn=_init_fn)
-
-    valid_loader = DataLoader(trainset,
-                              batch_size=batch_size,
-                              sampler=valid_sampler,
-                              collate_fn=trainset.collate_fn,
-                              num_workers=num_workers,
-                              pin_memory=pin_memory)
-
-    testset = IEMOCAPDataset(train=False)  # 初始化测试集
-    test_loader = DataLoader(testset,
-                             batch_size=batch_size,
-                             collate_fn=testset.collate_fn,
-                             num_workers=num_workers,
-                             pin_memory=pin_memory, worker_init_fn=_init_fn)
-
-    return train_loader, valid_loader, test_loader  # 返回训练、验证和测试数据加载器
+def get_train_valid_sampler(trainset, valid=0, dataset='EAV'):
+    size = len(trainset) 
+    idx = list(range(size)) 
+    split = int(valid*size) 
+    return SubsetRandomSampler(idx[split:]), SubsetRandomSampler(idx[:split])  
 
 def get_EAV_loaders(batch_size=32, valid=0.1, num_workers=0, pin_memory=False, sub=1):
     trainset = EAVDataset(train=True, subject = sub)
@@ -122,35 +62,31 @@ def get_EAV_loaders(batch_size=32, valid=0.1, num_workers=0, pin_memory=False, s
 
 
 def train_or_eval_model(model, loss_function, dataloader, epoch, optimizer=None, train=False):
-    """训练或评估模型"""
-    losses, preds, labels, masks = [], [], [], []  # 初始化损失、预测和标签
-    alphas, alphas_f, alphas_b, vids = [], [], [], []  # 用于保存注意力权重和视频ID
-    max_sequence_len = [] # 保存最大序列长度
+    losses, preds, labels, masks = [], [], [], [] 
+    alphas, alphas_f, alphas_b, vids = [], [], [], []  
+    max_sequence_len = [] 
 
-    assert not train or optimizer!=None   # 如果是训练模式，确保优化器不为空
+    assert not train or optimizer!=None  
     if train:
-        model.train()   # 设置模型为训练模式
+        model.train()  
     else:
-        model.eval()   # 设置模型为评估模式
+        model.eval()  
 
-    seed_everything() # 设置随机种子
-    for data in dataloader:  # 遍历数据加载器中的每一个批次
+    seed_everything() 
+    for data in dataloader:  
         if train:
-            optimizer.zero_grad()  # 清空优化器的梯度
+            optimizer.zero_grad() 
 
-        # 将数据移到GPU（如果可用）
-        # 这里data（一批次）的一个d： 文本特征，视觉特征，语音特征，qmask，umask，情感标签，视频id（被排除掉）
         textf, visuf, acouf, qmask, umask, label = [d.cuda() for d in data[:-1]] if cuda else data[:-1]        
 
-        max_sequence_len.append(textf.size(0)) # 记录当前批次的最大序列长度
+        max_sequence_len.append(textf.size(0))
 
-        # 前向传播
         log_prob, alpha, alpha_f, alpha_b, _ = model(textf, qmask, umask)
-        lp_ = log_prob.transpose(0,1).contiguous().view(-1, log_prob.size()[2]) # 处理log_prob
-        labels_ = label.view(-1) # 将标签展平
-        loss = loss_function(lp_, labels_, umask) # 计算损失
+        lp_ = log_prob.transpose(0,1).contiguous().view(-1, log_prob.size()[2]) 
+        labels_ = label.view(-1) 
+        loss = loss_function(lp_, labels_, umask) 
 
-        pred_ = torch.argmax(lp_,1)  # 获取预测结果
+        pred_ = torch.argmax(lp_,1)  
         preds.append(pred_.data.cpu().numpy()) # 将预测结果移到CPU并保存
         labels.append(labels_.data.cpu().numpy()) # 将标签移到CPU并保存
         masks.append(umask.view(-1).cpu().numpy()) # 将掩码移到CPU并保存
@@ -313,7 +249,7 @@ def train_or_eval_graph_model(model, loss_function, dataloader, epoch, cuda, mod
 
 
 if __name__ == '__main__':
-    path = './saved/IEMOCAP/'
+    path = './saved/EAV/'
 
     parser = argparse.ArgumentParser()
 
@@ -373,7 +309,7 @@ if __name__ == '__main__':
 
     parser.add_argument('--Deep_GCN_nlayers', type=int, default=4, help='Deep_GCN_nlayers')  # 深度GCN的层数
 
-    parser.add_argument('--Dataset', default='IEMOCAP', help='dataset to train and test') # 使用的数据集
+    parser.add_argument('--Dataset', default='EAV', help='dataset to train and test') # 使用的数据集
 
     parser.add_argument('--use_speaker', action='store_true', default=True, help='whether to use speaker embedding') # 是否使用说话者嵌入
 
@@ -420,9 +356,7 @@ if __name__ == '__main__':
     n_epochs   = args.epochs  # 训练轮数
     batch_size = args.batch_size  # 批次大小
     modals = args.modals  # 模态设置
-    # 特征维度映射
-    # IEMOCAP  文本：1024  音频： 1582   视觉： 342
-    # EAV      eeg：1024  音频： 1582   视觉： 342
+    
     feat2dim = {'IS10':1582,'3DCNN':512,'textCNN':100,'bert':768,'denseface':342,'MELD_text':600,'MELD_audio':300}
     D_audio = 1582 if args.Dataset=='EAV' else feat2dim['IS10'] if args.Dataset=='IEMOCAP' else feat2dim['MELD_audio']
     D_visual = 1024
@@ -544,10 +478,10 @@ if __name__ == '__main__':
     if args.Dataset == 'MELD':
         loss_function = FocalLoss()
     else:
-        if args.class_weight: # 如果使用类别权重
+        if args.class_weight: 
             if args.graph_model:
                 #loss_function = FocalLoss()
-                loss_function  = nn.NLLLoss(loss_weights.cuda() if cuda else loss_weights) # 使用负对数似然损失
+                loss_function  = nn.NLLLoss(loss_weights.cuda() if cuda else loss_weights) 
             else:
                 loss_function  = MaskedNLLLoss(loss_weights.cuda() if cuda else loss_weights)
         else:
@@ -558,7 +492,7 @@ if __name__ == '__main__':
 
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.l2)  # 初始化优化器
 
-    lr = args.lr  # 学习率
+    lr = args.lr  
 
 
     if args.Dataset == 'MELD':
