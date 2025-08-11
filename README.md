@@ -16,7 +16,8 @@ This repo is the official implementation of Hypergraph Multi-Modal Learning for 
 Emotional Recognition in Conversation (ERC) is a valuable approach for diagnosing health conditions such as autism or depression, as well as understanding emotions in individuals who struggle to express their feelings. Current ERC methods primarily rely on complete semantic textual information, including audio and visual data, but face challenges in integrating physiological signals such as Electroencephalography (EEG). This research proposes a novel framework of Hypergraph Multi-Modal Learning (Hyper-MML), designed to effectively identify emotions in conversation by integrating EEG with audio and video information to capture complex emotional dynamics. Firstly, we introduce the module of Adaptive Brain Encoder with Mutual-cross Attention (ABEMA) of EEG signals, which captures emotion-relevant features across different frequency bands while adapting to subject-specific variations through hierarchical mutual-cross attention mechanisms. Secondly, we propose a module of Adaptive Hypergraph Fusion (AHFM), which actively models higher-order relationships between multi-modal signals in ERC. Experimental results validated on the EAV and AFFEC datasets demonstrate that our Hyper-MML significantly outperforms the state-of-art methods in ERC. The proposed Hyper-MML can serve as an effective communication tool for healthcare professionals, enabling better engagement with patients who have difficulty expressing their emotions.
 
 ## Data availability
-You can download the relevant EEG dataset at zenodo.org
+
+
 
 ## Setting Up Your Environment and Dependencies
 To ensure a clean and consistent working environment for this project, please follow these steps:
@@ -64,6 +65,7 @@ By following these steps, you'll have a properly configured environment with all
 ## Citation
 
 If you find our work helpful to your research, we would appreciate a citation:
+
 @article{kang2025hypergraph,
   title={Hypergraph multi-modal learning for eeg-based emotion recognition in conversation},
   author={Kang, Zijian and Li, Yueyang and Gong, Shengyu and Zeng, Weiming and Yan, Hongjie and Bian, Lingbin and Siok, Wai Ting and Wang, Nizhuan},
