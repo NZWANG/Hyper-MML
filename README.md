@@ -69,9 +69,11 @@ By following these steps, you'll have a properly configured environment with all
 
 If you find our work helpful to your research, we would appreciate a citation:
 
+```bibtex
 @article{kang2025hypergraph,
   title={Hypergraph multi-modal learning for eeg-based emotion recognition in conversation},
   author={Kang Zijian, Li Yueyang, Gong Shengyu, Zeng Weiming, Yan Hongjie, Bian Lingbin, Zhang Zhiguo, Siok Wai Ting and Wang Nizhuan},
   journal={arXiv preprint arXiv:2502.21154},
   year={2025}
 }
+```
