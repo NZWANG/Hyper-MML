@@ -5,8 +5,8 @@ from torch.autograd import Variable
 from torch.nn.utils.rnn import pad_sequence
 from torch_geometric.nn import  GraphConv
 import numpy as np, itertools, random, copy, math
-from model_GCN import GCN_2Layers, GCNLayer1, GCNII, TextCNN
-from model_hyper import HyperGCN
+from GCN import GCN_2Layers, GCNLayer1, GCNII, TextCNN
+from HyperGCN import HyperGCN
 
 def print_grad(grad):
     print('the grad is', grad[2][0:5])

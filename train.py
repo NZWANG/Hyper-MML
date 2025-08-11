@@ -6,7 +6,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from torch.utils.data.sampler import SubsetRandomSampler, WeightedRandomSampler
-from dataloader import EAVDataset
+from datasets import EAVDataset, AFFECDataset
 from model import MaskedNLLLoss, LSTMModel, GRUModel, Model, MaskedMSELoss, FocalLoss
 from sklearn.metrics import f1_score, confusion_matrix, accuracy_score, classification_report, precision_recall_fscore_support
 import pandas as pd
@@ -14,6 +14,7 @@ import pickle as pk
 import datetime
 import ipdb
 
+print("import OK!")
 
 seed = 1475 
 def seed_everything(seed=seed):
@@ -29,12 +30,12 @@ def _init_fn(worker_id):
     np.random.seed(int(seed)+worker_id)
 
 def get_train_valid_sampler(trainset, valid=0, dataset='EAV'):
-    size = len(trainset) 
-    idx = list(range(size)) 
-    split = int(valid*size) 
-    return SubsetRandomSampler(idx[split:]), SubsetRandomSampler(idx[:split])  
+    size = len(trainset)
+    idx = list(range(size))
+    split = int(valid*size)
+    return SubsetRandomSampler(idx[split:]), SubsetRandomSampler(idx[:split])
 
-def get_EAV_loaders(batch_size=32, valid=0.1, num_workers=0, pin_memory=False, sub=1):
+def get_EAV_loaders(batch_size=16, valid=0, num_workers=0, pin_memory=False, sub=1):
     trainset = EAVDataset(train=True, subject = sub)
     train_sampler, valid_sampler = get_train_valid_sampler(trainset, valid)
 
@@ -60,114 +61,76 @@ def get_EAV_loaders(batch_size=32, valid=0.1, num_workers=0, pin_memory=False, s
 
     return train_loader, valid_loader, test_loader
 
+def get_AFFEC_loaders(batch_size=16, valid=0, num_workers=0, pin_memory=False, sub='acl'):
+    trainset = AFFECDataset(train=True, subject = sub)
+    train_sampler, valid_sampler = get_train_valid_sampler(trainset, valid)
 
-def train_or_eval_model(model, loss_function, dataloader, epoch, optimizer=None, train=False):
-    losses, preds, labels, masks = [], [], [], [] 
-    alphas, alphas_f, alphas_b, vids = [], [], [], []  
-    max_sequence_len = [] 
+    train_loader = DataLoader(trainset,
+                              batch_size=batch_size,
+                              collate_fn=trainset.collate_fn,
+                              num_workers=num_workers,
+                              pin_memory=pin_memory, worker_init_fn=_init_fn)
 
-    assert not train or optimizer!=None  
-    if train:
-        model.train()  
-    else:
-        model.eval()  
+    valid_loader = DataLoader(trainset,
+                              batch_size=batch_size,
+                              sampler=valid_sampler,
+                              collate_fn=trainset.collate_fn,
+                              num_workers=num_workers,
+                              pin_memory=pin_memory)
 
-    seed_everything() 
-    for data in dataloader:  
-        if train:
-            optimizer.zero_grad() 
+    testset = AFFECDataset(train=False, subject = sub)
+    test_loader = DataLoader(testset,
+                             batch_size=batch_size,
+                             collate_fn=testset.collate_fn,
+                             num_workers=num_workers,
+                             pin_memory=pin_memory, worker_init_fn=_init_fn)
 
-        textf, visuf, acouf, qmask, umask, label = [d.cuda() for d in data[:-1]] if cuda else data[:-1]        
-
-        max_sequence_len.append(textf.size(0))
-
-        log_prob, alpha, alpha_f, alpha_b, _ = model(textf, qmask, umask)
-        lp_ = log_prob.transpose(0,1).contiguous().view(-1, log_prob.size()[2]) 
-        labels_ = label.view(-1) 
-        loss = loss_function(lp_, labels_, umask) 
-
-        pred_ = torch.argmax(lp_,1)  
-        preds.append(pred_.data.cpu().numpy()) # 将预测结果移到CPU并保存
-        labels.append(labels_.data.cpu().numpy()) # 将标签移到CPU并保存
-        masks.append(umask.view(-1).cpu().numpy()) # 将掩码移到CPU并保存
-
-        losses.append(loss.item()*masks[-1].sum()) # 保存当前批次的损失
-        if train:
-            loss.backward() # 反向传播
-            if args.tensorboard:
-                for param in model.named_parameters():
-                    writer.add_histogram(param[0], param[1].grad, epoch)  # 记录参数的梯度
-            optimizer.step()  # 更新参数
-        else:
-            alphas += alpha  # 保存注意力权重
-            alphas_f += alpha_f
-            alphas_b += alpha_b
-            vids += data[-1]  # 保存视频ID
-
-    if preds!=[]:
-        preds  = np.concatenate(preds) # 合并所有预测结果
-        labels = np.concatenate(labels) # 合并所有标签
-        masks  = np.concatenate(masks) # 合并所有掩码
-    else:
-        return float('nan'), float('nan'), [], [], [], float('nan'),[] # 如果没有预测结果，返回NaN
-
-    avg_loss = round(np.sum(losses)/np.sum(masks), 4)   # 计算平均损失
-    avg_accuracy = round(accuracy_score(labels,preds, sample_weight=masks)*100, 2)  # 计算平均准确率
-    avg_fscore = round(f1_score(labels,preds, sample_weight=masks, average='weighted')*100, 2)   # 计算F1分数
-    
-    return avg_loss, avg_accuracy, labels, preds, masks, avg_fscore, [alphas, alphas_f, alphas_b, vids]  # 返回结果
+    return train_loader, valid_loader, test_loader
 
 
-def train_or_eval_graph_model(model, loss_function, dataloader, epoch, cuda, modals, optimizer=None, train=False, dataset='IEMOCAP'):
-    """训练或评估图模型"""
-    losses, preds, labels = [], [], []  # 初始化损失、预测和标签
-    scores, vids = [], [] # 用于保存分数和视频ID
+def train_or_eval_graph_model(model, loss_function, dataloader, epoch, cuda, modals, optimizer=None, train=False, dataset='EAV'):
+    losses, preds, labels = [], [], []  
+    scores, vids = [], []
 
-    ei, et, en, el = torch.empty(0).type(torch.LongTensor), torch.empty(0).type(torch.LongTensor), torch.empty(0), []  # 初始化图相关变量
+    ei, et, en, el = torch.empty(0).type(torch.LongTensor), torch.empty(0).type(torch.LongTensor), torch.empty(0), [] 
 
     if cuda:
-        ei, et, en = ei.cuda(), et.cuda(), en.cuda()  # 将变量移到GPU
+        ei, et, en = ei.cuda(), et.cuda(), en.cuda() 
 
-    assert not train or optimizer!=None  # 如果是训练模式，确保优化器不为空
+    assert not train or optimizer!=None 
     if train:
-        model.train() # 设置模型为训练模式
+        model.train() 
     else:
-        model.eval() # 设置模型为评估模式
+        model.eval()
 
-    seed_everything()  # 设置随机种子
+    seed_everything() 
     for data in dataloader:
         if train:
-            optimizer.zero_grad() # 清空优化器的梯度
+            optimizer.zero_grad()
 
-        # 将数据移到GPU（如果可用）
-        # 这里data（一批次）的一个d： 4个文本特征，视觉特征，语音特征，qmask，umask，情感标签，视频id（被排除掉）
-        textf1,textf2,textf3,textf4, visuf, acouf, qmask, umask, label = [d.cuda() for d in data[:-1]] if cuda else data[:-1]
+        eegf1,eegf2,eegf3,eegf4, visuf, acouf, qmask, umask, label = [d.cuda() for d in data[:-1]] if cuda else data[:-1]
 
-
-
-
-        #在m3net中，multi_modal=true，mm_fusion_mthd=concat-DHT
         if args.multi_modal:  # 如果启用了多模态
             if args.mm_fusion_mthd=='concat':  # 如果融合方法是连接
                 if modals == 'avl':
-                    textf = torch.cat([acouf, visuf, textf1,textf2,textf3,textf4],dim=-1)  # 连接音频、视觉和文本特征
+                    eegf = torch.cat([acouf, visuf, eeg1, eeg2, eeg3, eeg4],dim=-1)  
                 elif modals == 'av':
-                    textf = torch.cat([acouf, visuf],dim=-1)    # 连接音频和视觉特征
+                    eegf = torch.cat([acouf, visuf],dim=-1)    # 连接音频和视觉特征
                 elif modals == 'vl':
-                    textf = torch.cat([visuf, textf1,textf2,textf3,textf4],dim=-1)   # 连接视觉和文本特征
+                    eegf = torch.cat([visuf, eegf1,eegf2,eegf3,eegf4],dim=-1)   # 连接视觉和文本特征
                 elif modals == 'al':
-                    textf = torch.cat([acouf, textf1,textf2,textf3,textf4],dim=-1)  # 连接音频和文本特征
+                    eegf = torch.cat([acouf, eegf1,eegf2,eegf3,eegf4],dim=-1)  # 连接音频和文本特征
                 else:
                     raise NotImplementedError
             elif args.mm_fusion_mthd=='gated':
-                textf = textf   # 如果使用门控机制，直接使用textf
-        else:  # 如果没有启用多模态
-            if modals == 'a':  # 仅使用音频特征
-                textf = acouf
-            elif modals == 'v': # 仅使用视觉特征
-                textf = visuf
-            elif modals == 'l': # 仅使用文本特征
-                textf = textf
+                eegf = eegf   
+        else:  
+            if modals == 'a':  
+                eegf = acouf
+            elif modals == 'v': 
+                eegf = visuf
+            elif modals == 'l': 
+                eegf = eegf
             else:
                 raise NotImplementedError
 
@@ -175,64 +138,44 @@ def train_or_eval_graph_model(model, loss_function, dataloader, epoch, cuda, mod
         lengths = [(umask[j] == 1).nonzero(as_tuple=False).tolist()[-1][0] + 1 for j in range(len(umask))]
 
         # 调整形状
-        textf1 = textf1.permute(1, 0).unsqueeze(0)  # 变为 [1, 16, 1024]
-        textf2 = textf2.permute(1, 0).unsqueeze(0)  # 变为 [1, 16, 1024]
-        textf3 = textf3.permute(1, 0).unsqueeze(0)  # 变为 [1, 16, 1024]
-        textf4 = textf4.permute(1, 0).unsqueeze(0)  # 变为 [1, 16, 1024]
-        qmask = qmask.permute(1, 0).unsqueeze(0)  # 变为 [1, 16, 2]
-        # umask = umask.unsqueeze(0)  # 保持 [16, 1]
-        acouf = acouf.permute(1, 0).unsqueeze(0)  # 变为 [1, 16, 1582]
-        visuf = visuf.permute(1, 0).unsqueeze(0)  # 变为 [1, 16, 342]
+        eegf1 = eegf1.permute(1, 0).unsqueeze(0)  # [1, 16, 1024]
+        eegf2 = eegf2.permute(1, 0).unsqueeze(0)  # [1, 16, 1024]
+        eegf3 = eegf3.permute(1, 0).unsqueeze(0)  # [1, 16, 1024]
+        eegf4 = eegf4.permute(1, 0).unsqueeze(0)  # [1, 16, 1024]
+        qmask = qmask.permute(1, 0).unsqueeze(0)  # [1, 16, 2]
+        acouf = acouf.permute(1, 0).unsqueeze(0)  # [1, 16, 1582]
+        visuf = visuf.permute(1, 0).unsqueeze(0)  # [1, 16, 342]
 
-        # # 打印结果
-        # print("textf1 shape:", textf1.shape)
-        # print("textf2 shape:", textf2.shape)
-        # print("textf3 shape:", textf3.shape)
-        # print("textf4 shape:", textf4.shape)
-        # print("qmask shape:", qmask.shape)
-        # print("umask shape:", umask.shape)
-        # print("acouf shape:", acouf.shape)
-        # print("visuf shape:", visuf.shape)
-        # print("labels shape:", label.shape)
-        # print("lengths :", lengths)
 
 
         # 前向传播
         if args.multi_modal and args.mm_fusion_mthd=='gated':
-            log_prob, e_i, e_n, e_t, e_l = model(textf, qmask, umask, lengths, acouf, visuf)
+            log_prob, e_i, e_n, e_t, e_l = model(eegf, qmask, umask, lengths, acouf, visuf)
         elif args.multi_modal and args.mm_fusion_mthd=='concat_subsequently':   
-            log_prob, e_i, e_n, e_t, e_l = model([textf1,textf2,textf3,textf4], qmask, umask, lengths, acouf, visuf, epoch)
+            log_prob, e_i, e_n, e_t, e_l = model([eegf1,eegf2,eegf3,eegf4], qmask, umask, lengths, acouf, visuf, epoch)
         elif args.multi_modal and args.mm_fusion_mthd=='concat_DHT':   
-            log_prob, e_i, e_n, e_t, e_l = model([textf1,textf2,textf3,textf4], qmask, umask, lengths, acouf, visuf, epoch)
-        # 这里应该是我自己的
-        # 应该改对应model的输入！！
-        elif args.multi_modal and args.mm_fusion_mthd=='concat_EAV':
-            log_prob, e_i, e_n, e_t, e_l = model([textf1,textf2,textf3,textf4], qmask, umask, lengths, acouf, visuf, epoch)
+            log_prob, e_i, e_n, e_t, e_l = model([eegf1,eegf2,eegf3,eegf4], qmask, umask, lengths, acouf, visuf, epoch)
         else:
-            log_prob, e_i, e_n, e_t, e_l = model(textf, qmask, umask, lengths)
+            log_prob, e_i, e_n, e_t, e_l = model(eegf, qmask, umask, lengths)
 
-        label = torch.cat([label[j][:lengths[j]] for j in range(len(label))])  # 处理标签
-        # print('打印label：', label)
+        label = torch.cat([label[j][:lengths[j]] for j in range(len(label))]) 
         label = label.long()
-        # print('打印label：', label)
 
-        loss = loss_function(log_prob, label)  # 计算损失
-        preds.append(torch.argmax(log_prob, 1).cpu().numpy())  # 获取预测结果
-        labels.append(label.cpu().numpy()) # 保存标签
-        losses.append(loss.item()) # 保存损失
+        loss = loss_function(log_prob, label)  
+        preds.append(torch.argmax(log_prob, 1).cpu().numpy()) 
+        labels.append(label.cpu().numpy()) 
+        losses.append(loss.item()) 
         if train:
-            loss.backward()  # 反向传播
-            optimizer.step()    # 更新参数
+            loss.backward()  
+            optimizer.step()  
             
-
     if preds!=[]:
-        preds  = np.concatenate(preds)  # 合并所有预测结果
-        labels = np.concatenate(labels)  # 合并所有标签
+        preds  = np.concatenate(preds) 
+        labels = np.concatenate(labels) 
     else:
         return float('nan'), float('nan'), [], [], float('nan'), [], [], [], [], [] # 如果没有预测结果，返回NaN
 
-    vids += data[-1]   # 保存视频ID
-    # 转换为NumPy数组
+    vids += data[-1]   
     ei = ei.data.cpu().numpy()
     et = et.data.cpu().numpy()
     en = en.data.cpu().numpy()
@@ -241,11 +184,11 @@ def train_or_eval_graph_model(model, loss_function, dataloader, epoch, cuda, mod
     preds = np.array(preds)
     vids = np.array(vids)
 
-    avg_loss = round(np.sum(losses)/len(losses), 4)  # 计算平均损失
-    avg_accuracy = round(accuracy_score(labels, preds)*100, 2) # 计算平均准确率
-    avg_fscore = round(f1_score(labels,preds, average='weighted')*100, 2)  # 计算F1分数
+    avg_loss = round(np.sum(losses)/len(losses), 4) 
+    avg_accuracy = round(accuracy_score(labels, preds)*100, 2) 
+    avg_fscore = round(f1_score(labels,preds, average='weighted')*100, 2) 
 
-    return avg_loss, avg_accuracy, labels, preds, avg_fscore, vids, ei, et, en, el  # 返回结果
+    return avg_loss, avg_accuracy, labels, preds, avg_fscore, vids, ei, et, en, el  
 
 
 if __name__ == '__main__':
@@ -253,23 +196,23 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--no-cuda', action='store_true', default=False, help='does not use GPU')  # 是否使用GPU
+    parser.add_argument('--no-cuda', action='store_true', default=False, help='does not use GPU') 
 
-    parser.add_argument('--base-model', default='LSTM', help='base recurrent model, must be one of DialogRNN/LSTM/GRU')  # 基础模型
+    parser.add_argument('--base-model', default='LSTM', help='base recurrent model, must be one of DialogRNN/LSTM/GRU')  
 
-    parser.add_argument('--graph-model', action='store_true', default=True, help='whether to use graph model after recurrent encoding')  # 是否使用图模型
+    parser.add_argument('--graph-model', action='store_true', default=True, help='whether to use graph model after recurrent encoding')
 
-    parser.add_argument('--nodal-attention', action='store_true', default=True, help='whether to use nodal attention in graph model: Equation 4,5,6 in Paper') # 是否使用节点注意力
+    parser.add_argument('--nodal-attention', action='store_true', default=True, help='whether to use nodal attention in graph model') 
 
-    parser.add_argument('--windowp', type=int, default=10, help='context window size for constructing edges in graph model for past utterances')  # 上下文窗口大小
+    parser.add_argument('--windowp', type=int, default=10, help='context window size for constructing edges in graph model for past utterances') 
 
-    parser.add_argument('--windowf', type=int, default=10, help='context window size for constructing edges in graph model for future utterances') # 上下文窗口大小
+    parser.add_argument('--windowf', type=int, default=10, help='context window size for constructing edges in graph model for future utterances') 
 
     parser.add_argument('--lr', type=float, default=0.0001, metavar='LR', help='learning rate')
     
-    parser.add_argument('--l2', type=float, default=0.00003, metavar='L2', help='L2 regularization weight') # L2正则化权重
+    parser.add_argument('--l2', type=float, default=0.00003, metavar='L2', help='L2 regularization weight')
     
-    parser.add_argument('--rec-dropout', type=float, default=0.1, metavar='rec_dropout', help='rec_dropout rate')  # 递归层dropout比率
+    parser.add_argument('--rec-dropout', type=float, default=0.1, metavar='rec_dropout', help='rec_dropout rate')
     
     parser.add_argument('--dropout', type=float, default=0.5, metavar='dropout', help='dropout rate')
     
@@ -277,130 +220,124 @@ if __name__ == '__main__':
     
     parser.add_argument('--epochs', type=int, default=60, metavar='E', help='number of epochs')
     
-    parser.add_argument('--class-weight', action='store_true', default=True, help='use class weights')   # 是否使用类别权重
+    parser.add_argument('--class-weight', action='store_true', default=True, help='use class weights')  
     
-    parser.add_argument('--active-listener', action='store_true', default=False, help='active listener')  # 是否使用主动监听
+    parser.add_argument('--active-listener', action='store_true', default=False, help='active listener')  
     
-    parser.add_argument('--attention', default='general', help='Attention type in DialogRNN model')  # 注意力类型
+    parser.add_argument('--attention', default='general', help='Attention type in DialogRNN model') 
     
     parser.add_argument('--tensorboard', action='store_true', default=False, help='Enables tensorboard log')
 
-    parser.add_argument('--graph_type', default='relation', help='relation/GCN3/DeepGCN/MMGCN/MMGCN2')   # 图类型
+    parser.add_argument('--graph_type', default='relation', help='relation/GCN3/DeepGCN/MMGCN/MMGCN2')  
 
-    parser.add_argument('--use_topic', action='store_true', default=False, help='whether to use topic information')  # 是否使用主题信息
+    parser.add_argument('--use_topic', action='store_true', default=False, help='whether to use topic information') 
 
-    parser.add_argument('--alpha', type=float, default=0.2, help='alpha')  # alpha参数
+    parser.add_argument('--alpha', type=float, default=0.2, help='alpha')  
 
-    parser.add_argument('--multiheads', type=int, default=6, help='multiheads')  # 多头数量
+    parser.add_argument('--multiheads', type=int, default=6, help='multiheads') 
 
-    parser.add_argument('--graph_construct', default='full', help='single/window/fc for MMGCN2; direct/full for others')  # 图构造方式
+    parser.add_argument('--graph_construct', default='full', help='single/window/fc for MMGCN2; direct/full for others') 
 
-    parser.add_argument('--use_gcn', action='store_true', default=False, help='whether to combine spectral and none-spectral methods or not')  # 是否结合光谱和非光谱方法
+    parser.add_argument('--use_gcn', action='store_true', default=False, help='whether to combine spectral and none-spectral methods or not')  
 
-    parser.add_argument('--use_residue', action='store_true', default=False, help='whether to use residue information or not')  # 是否使用残差信息
+    parser.add_argument('--use_residue', action='store_true', default=False, help='whether to use residue information or not')
 
-    parser.add_argument('--multi_modal', action='store_true', default=False, help='whether to use multimodal information') # 是否使用多模态信息
+    parser.add_argument('--multi_modal', action='store_true', default=False, help='whether to use multimodal information') 
 
-    parser.add_argument('--mm_fusion_mthd', default='concat', help='method to use multimodal information: concat, gated, concat_subsequently') # 多模态融合方法
+    parser.add_argument('--mm_fusion_mthd', default='concat', help='method to use multimodal information: concat, gated, concat_subsequently')
 
-    parser.add_argument('--modals', default='avl', help='modals to fusion')  # 使用的模态
+    parser.add_argument('--modals', default='avl', help='modals to fusion')  
 
-    parser.add_argument('--av_using_lstm', action='store_true', default=False, help='whether to use lstm in acoustic and visual modality') # 是否在音频和视觉模态中使用LSTM
+    parser.add_argument('--av_using_lstm', action='store_true', default=False, help='whether to use lstm in acoustic and visual modality')
 
-    parser.add_argument('--Deep_GCN_nlayers', type=int, default=4, help='Deep_GCN_nlayers')  # 深度GCN的层数
+    parser.add_argument('--Deep_GCN_nlayers', type=int, default=4, help='Deep_GCN_nlayers')  
 
-    parser.add_argument('--Dataset', default='EAV', help='dataset to train and test') # 使用的数据集
+    parser.add_argument('--Dataset', default='EAV', help='dataset to train and test, EAV/AFFEC') 
 
-    parser.add_argument('--use_speaker', action='store_true', default=True, help='whether to use speaker embedding') # 是否使用说话者嵌入
+    parser.add_argument('--use_speaker', action='store_true', default=True, help='whether to use speaker embedding') 
 
-    parser.add_argument('--use_modal', action='store_true', default=False, help='whether to use modal embedding')  # 是否使用模态嵌入
+    parser.add_argument('--use_modal', action='store_true', default=False, help='whether to use modal embedding') 
 
-    parser.add_argument('--norm', default='LN2', help='NORM type')   # 归一化类型
+    parser.add_argument('--norm', default='LN2', help='NORM type')  
 
-    parser.add_argument('--testing', action='store_true', default=False, help='testing')  # 是否为测试模式
+    parser.add_argument('--testing', action='store_true', default=False, help='testing') 
 
-    parser.add_argument('--num_L', type=int, default=3, help='num_hyperconvs')  # 超卷积层数量
+    parser.add_argument('--num_L', type=int, default=3, help='num_hyperconvs') 
 
-    parser.add_argument('--num_K', type=int, default=4, help='num_convs')  # 卷积层数量
+    parser.add_argument('--num_K', type=int, default=4, help='num_convs')
 
-    parser.add_argument('--subject', type=int, default=1, help='subject id')  # 卷积层数量
+    parser.add_argument('--subject', type=int, default=1, help='subject id')  
 
-    args = parser.parse_args() # 解析命令行参数
-    today = datetime.datetime.now()   # 获取当前时间
+    args = parser.parse_args() 
+    today = datetime.datetime.now() 
     subject = args.subject
-    print(args) # 打印参数
+    print(args) 
 
-    # 根据命令行参数构建模型名称
     if args.av_using_lstm:
         name_ = args.mm_fusion_mthd+'_'+args.modals+'_'+args.graph_type+'_'+args.graph_construct+'using_lstm_'+args.Dataset
     else:
         name_ = args.mm_fusion_mthd+'_'+args.modals+'_'+args.graph_type+'_'+args.graph_construct+str(args.Deep_GCN_nlayers)+'_'+args.Dataset
 
-    ##  use_speaker = True
     if args.use_speaker:
         name_ = name_+'_speaker'
     if args.use_modal:
         name_ = name_+'_modal'
 
-    args.cuda = torch.cuda.is_available() and not args.no_cuda   # 检查是否使用CUDA
+    args.cuda = torch.cuda.is_available() and not args.no_cuda  
     if args.cuda:
         print('Running on GPU')
     else:
         print('Running on CPU')
 
     if args.tensorboard:
-        from tensorboardX import SummaryWriter  # 导入TensorBoard记录器
+        from tensorboardX import SummaryWriter 
         writer = SummaryWriter()
 
-    cuda       = args.cuda  # CUDA标志
-    n_epochs   = args.epochs  # 训练轮数
-    batch_size = args.batch_size  # 批次大小
-    modals = args.modals  # 模态设置
-    
-    feat2dim = {'IS10':1582,'3DCNN':512,'textCNN':100,'bert':768,'denseface':342,'MELD_text':600,'MELD_audio':300}
-    D_audio = 1582 if args.Dataset=='EAV' else feat2dim['IS10'] if args.Dataset=='IEMOCAP' else feat2dim['MELD_audio']
-    D_visual = 1024
-    #D_visual = feat2dim['denseface']
-    D_text = 1024 #feat2dim['textCNN'] if args.Dataset=='IEMOCAP' else feat2dim['MELD_text']
+    cuda       = args.cuda 
+    n_epochs   = args.epochs 
+    batch_size = args.batch_size  
+    modals = args.modals  
 
-    if args.multi_modal:   # 如果使用多模态
+    D_audio = 1582 if args.Dataset=='EAV' else 31
+    D_visual = 1024 if args.Dataset=='EAV' else 44
+    D_eeg = 1024 
+
+    if args.multi_modal:   
         if args.mm_fusion_mthd=='concat':
             if modals == 'avl':
-                D_m = D_audio+D_visual+D_text
+                D_m = D_audio+D_visual+D_eeg
             elif modals == 'av':
                 D_m = D_audio+D_visual
             elif modals == 'al':
-                D_m = D_audio+D_text
+                D_m = D_audio+D_eeg
             elif modals == 'vl':
-                D_m = D_visual+D_text
+                D_m = D_visual+D_eeg
             else:
                 raise NotImplementedError
         else:
-            D_m = 1024 # 如果没有使用连接方法
+            D_m = 1024 
     else:
         if modals == 'a':
             D_m = D_audio
         elif modals == 'v':
             D_m = D_visual
         elif modals == 'l':
-            D_m = D_text
+            D_m = D_eeg
         else:
             raise NotImplementedError
 
-    # 图模型相关参数
-    D_g = 512  # if args.Dataset=='IEMOCAP' else 1024
+    D_g = 512  
     D_p = 150
     D_e = 100
     D_h = 100
     D_a = 100
     graph_h = 512
-    n_speakers = 9 if args.Dataset=='MELD' else 2
-    n_classes  = 7 if args.Dataset=='MELD' else 6 if args.Dataset=='IEMOCAP' else 5 if args.Dataset=='EAV' else 1
+    n_speakers = 2
+    n_classes  = 5 if args.Dataset=='EAV' else 3
 
-    if args.graph_model:   # 如果使用图模型
+    if args.graph_model:  
         seed_everything()
 
-        # 初始化模型
         model = Model(args.base_model,
                                  D_m, D_g, D_p, D_e, D_h, D_a, graph_h,
                                  n_speakers=n_speakers,
@@ -461,77 +398,65 @@ if __name__ == '__main__':
     if cuda:
         model.cuda()
 
-    if args.Dataset == 'IEMOCAP':
-        loss_weights = torch.FloatTensor([1/0.086747,
-                                        1/0.144406,
-                                        1/0.227883,
-                                        1/0.160585,
-                                        1/0.127711,
-                                        1/0.252668])
     if args.Dataset == 'EAV':
         loss_weights = torch.FloatTensor([1/0.2,
                                         1/0.2,
                                         1/0.2,
                                         1/0.2,
                                         1/0.2])
+    if args.Dataset == 'AFFEC':
+        loss_weights = torch.FloatTensor([1/0.33,
+                                        1/0.34,
+                                        1/0.33])
 
-    if args.Dataset == 'MELD':
-        loss_function = FocalLoss()
-    else:
-        if args.class_weight: 
-            if args.graph_model:
-                #loss_function = FocalLoss()
-                loss_function  = nn.NLLLoss(loss_weights.cuda() if cuda else loss_weights) 
-            else:
-                loss_function  = MaskedNLLLoss(loss_weights.cuda() if cuda else loss_weights)
+
+    if args.class_weight: 
+        if args.graph_model:
+            loss_function  = nn.NLLLoss(loss_weights.cuda() if cuda else loss_weights) # 使用负对数似然损失
         else:
-            if args.graph_model:
-                loss_function = nn.NLLLoss()
-            else:
-                loss_function = MaskedNLLLoss()
+            loss_function  = MaskedNLLLoss(loss_weights.cuda() if cuda else loss_weights)
+    else:
+        if args.graph_model:
+            loss_function = nn.NLLLoss()
+        else:
+            loss_function = MaskedNLLLoss()
 
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.l2)  # 初始化优化器
 
-    lr = args.lr  
+    lr = args.lr
 
-
-    if args.Dataset == 'MELD':
-        train_loader, valid_loader, test_loader = get_MELD_loaders(valid=0.0,
-                                                                    batch_size=batch_size,
-                                                                    num_workers=2)
-    elif args.Dataset == 'IEMOCAP':
-
-        train_loader, valid_loader, test_loader = get_IEMOCAP_loaders(valid=0.0,
-                                                                      batch_size=batch_size,
-                                                                      num_workers=2)
-    elif args.Dataset == 'EAV':
-        print(f'-------------subject{subject:02d}------------')
+    if args.Dataset == 'EAV':
+        print(f'-------------subject{subject}------------')
         train_loader, valid_loader, test_loader = get_EAV_loaders(valid=0.0,
                                                                       batch_size=batch_size,
                                                                       num_workers=2, sub=subject)
+    elif args.Dataset == 'AFFEC':
+        print(f'-------------subject{subject}------------')
+        train_loader, valid_loader, test_loader = get_AFFEC_loaders(valid=0.0,
+                                                                      batch_size=batch_size,
+                                                                      num_workers=0, sub=subject)
     else:
         print("There is no such dataset")
 
-    best_fscore, best_loss, best_label, best_pred, best_mask = None, None, None, None, None  # 初始化最佳指标
-    all_fscore, all_acc, all_loss = [], [], []  # 保存所有指标
+    best_fscore, best_loss, best_label, best_pred, best_mask = None, None, None, None, None  
+    all_fscore, all_acc, all_loss = [], [], [] 
 
-    if args.testing: # 如果是测试模式
+    if args.testing: 
         state = torch.load("best_model.pth.tar")
         model.load_state_dict(state)
         print('testing loaded model')
         test_loss, test_acc, test_label, test_pred, test_fscore, _, _, _, _, _ = train_or_eval_graph_model(model, loss_function, test_loader, 0, cuda, args.modals, dataset=args.Dataset)
         print('test_acc:',test_acc,'test_fscore:',test_fscore)
 
-    # 训练过程
 
     for e in range(n_epochs):
-        start_time = time.time()  # 记录开始时间
+        start_time = time.time()  
 
-        if args.graph_model: # 如果使用图模型
+        if args.graph_model: 
             train_loss, train_acc, _, _, train_fscore, _, _, _, _, _ = train_or_eval_graph_model(model, loss_function, train_loader, e, cuda, args.modals, optimizer, True, dataset=args.Dataset)
             valid_loss, valid_acc, _, _, valid_fscore, _, _, _, _, _ = train_or_eval_graph_model(model, loss_function, valid_loader, e, cuda, args.modals, dataset=args.Dataset)
             test_loss, test_acc, test_label, test_pred, test_fscore, _, _, _, _, _ = train_or_eval_graph_model(model, loss_function, test_loader, e, cuda, args.modals, dataset=args.Dataset)
-            all_fscore.append(test_fscore) # 保存所有F1分数
+            all_fscore.append(test_fscore) 
 
 
         else:
@@ -540,10 +465,10 @@ if __name__ == '__main__':
             test_loss, test_acc, test_label, test_pred, test_mask, test_fscore, attentions = train_or_eval_model(model, loss_function, test_loader, e)
             all_fscore.append(test_fscore)
 
-        if best_loss == None or best_loss > test_loss:  # 更新最佳损失
+        if best_loss == None or best_loss > test_loss:
             best_loss, best_label, best_pred = test_loss, test_label, test_pred
 
-        if best_fscore == None or best_fscore < test_fscore: # 更新最佳F1分数
+        if best_fscore == None or best_fscore < test_fscore: 
             best_fscore = test_fscore
             best_label, best_pred = test_label, test_pred
             #test_loss, test_acc, test_label, test_pred, test_fscore, _, _, _, _, _ = train_or_eval_graph_model(model, loss_function, test_loader, e, cuda, args.modals, dataset=args.Dataset)
@@ -554,39 +479,32 @@ if __name__ == '__main__':
             writer.add_scalar('train: accuracy', train_acc, e)
             writer.add_scalar('train: fscore', train_fscore, e)
 
-        # 输出训练过程中的各项指标
         print('epoch: {}, train_loss: {}, train_acc: {}, train_fscore: {}, test_loss: {}, test_acc: {}, test_fscore: {}, time: {} sec'.\
                 format(e+1, train_loss, train_acc, train_fscore, test_loss, test_acc, test_fscore, round(time.time()-start_time, 2)))
-        # if (e+1)%10 == 0:  # 每10个epoch输出一次最佳F1分数和分类报告
-        #     print ('----------best F-Score:', max(all_fscore))
-        #     print(classification_report(best_label, best_pred, sample_weight=best_mask,digits=4))
-        #     print(confusion_matrix(best_label,best_pred,sample_weight=best_mask))
 
-        
-    
 
     if args.tensorboard:
         writer.close()
 
-    if not args.testing: # 如果不是测试模式
+    if not args.testing: 
         print('Test performance..')
-        print ('F-Score:', max(all_fscore)) # 输出最佳F1分数
+        print ('F-Score:', max(all_fscore)) 
         if not os.path.exists("record_{}_{}_{}.pk".format(today.year, today.month, today.day)):
             with open("record_{}_{}_{}.pk".format(today.year, today.month, today.day),'wb') as f:
-                pk.dump({}, f)  # 初始化记录文件
+                pk.dump({}, f)  
         with open("record_{}_{}_{}.pk".format(today.year, today.month, today.day), 'rb') as f:
-            record = pk.load(f)  # 加载记录
-        key_ = name_ # 记录键
+            record = pk.load(f)  
+        key_ = name_
         if record.get(key_, False):
-            record[key_].append(max(all_fscore)) # 更新记录
+            record[key_].append(max(all_fscore)) 
         else:
-            record[key_] = [max(all_fscore)] # 创建新的记录
+            record[key_] = [max(all_fscore)] 
         if record.get(key_+'record', False):
-            record[key_+'record'].append(classification_report(best_label, best_pred, sample_weight=best_mask,digits=4))  # 更新分类报告记录
+            record[key_+'record'].append(classification_report(best_label, best_pred, sample_weight=best_mask,digits=4))  
         else:
-            record[key_+'record'] = [classification_report(best_label, best_pred, sample_weight=best_mask,digits=4)]  # 创建新的分类报告记录
+            record[key_+'record'] = [classification_report(best_label, best_pred, sample_weight=best_mask,digits=4)] 
         with open("record_{}_{}_{}.pk".format(today.year, today.month, today.day),'wb') as f:
             pk.dump(record, f)
 
-        print(classification_report(best_label, best_pred, sample_weight=best_mask,digits=4)) # 输出最佳分类报告
-        print(confusion_matrix(best_label,best_pred,sample_weight=best_mask)) # 输出混淆矩阵
+        print(classification_report(best_label, best_pred, sample_weight=best_mask,digits=4)) 
+        print(confusion_matrix(best_label,best_pred,sample_weight=best_mask)) 
