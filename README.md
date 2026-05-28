@@ -58,22 +58,19 @@ conda info --envs
 
 By following these steps, you'll have a properly configured environment with all necessary dependencies installed, ensuring the project runs smoothly.
 
-## Acknowledge
 
-**Disclaimer: Our training framework uses the method provided in this article. Special thanks to Li et al. for their open source contributions. Excellent code logic and completeness.**
-1. Chen F, Shao J, Zhu S, et al. Multivariate, multi-frequency and multimodal: Rethinking graph neural networks for emotion recognition in conversation[C]//Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition. 2023: 10761-10770.
-2. Lee M H, Shomanov A, Begim B, et al. EAV: EEG-audio-video dataset for emotion recognition in conversational contexts[J]. Scientific data, 2024, 11(1): 1026.
-3. Sekiavandi M J, Dixen L, Fimland J, et al. Advancing Face-to-Face Emotion Communication: A Multimodal Dataset (AFFEC)[J]. arXiv preprint arXiv:2504.18969, 2025.
 
 ## Citation
 
 If you find our work helpful to your research, we would appreciate a citation:
 
 ```bibtex
-@article{kang2025hypergraph,
-  title={Hypergraph multi-modal learning for eeg-based emotion recognition in conversation},
-  author={Kang Zijian, Li Yueyang, Gong Shengyu, Zeng Weiming, Yan Hongjie, Bian Lingbin, Zhang Zhiguo, Siok Wai Ting and Wang Nizhuan},
-  journal={arXiv preprint arXiv:2502.21154},
-  year={2025}
+@article{kang2026hypergraph,
+  title={Hypergraph multi-modal learning for EEG-based emotion recognition in conversation},
+  author={Kang, Zijian and Li, Yueyang and Gong, Shengyu and Zeng, Weiming and Yan, Hongjie and Bian, Lingbin and Zhang, Zhiguo and Siok, Wai Ting and Wang, Nizhuan},
+  journal={Neural Networks},
+  pages={109057},
+  year={2026},
+  publisher={Elsevier}
 }
 ```
