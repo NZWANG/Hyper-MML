@@ -19,7 +19,7 @@ Emotional Recognition in Conversation (ERC) is a valuable approach for diagnosin
 
 Download EAV dataset: https://zenodo.org/records/13799131
 
-Download AFFEC dataset: https://zenodo.org/records/14794876
+Preprocessed .pkl files: Link:https://pan.baidu.com/s/1LvWogvOFpIEYrGP9CxUGgw Password: x6gf
 
 
 ## Setting Up Your Environment and Dependencies
