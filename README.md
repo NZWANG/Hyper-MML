@@ -21,7 +21,7 @@ Download EAV dataset: https://zenodo.org/records/13799131
 
 Preprocessed .pkl files: Link: https://pan.baidu.com/s/19uQxD-v-0SNw9bwTgrjr0g Password: 6t6n 
 
-The pre-trained model used for feature extraction: Link: https://pan.baidu.com/s/1DFd98GKIu6V2-7rnTarzIA Password: a1kz 
+Pre-trained model used for feature extraction: Link: https://pan.baidu.com/s/1DFd98GKIu6V2-7rnTarzIA Password: a1kz 
 
 ## Setting Up Your Environment and Dependencies
 To ensure a clean and consistent working environment for this project, please follow these steps:
