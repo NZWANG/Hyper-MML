@@ -198,7 +198,7 @@ if __name__ == '__main__':
 
     parser.add_argument('--no-cuda', action='store_true', default=False, help='does not use GPU') 
 
-    parser.add_argument('--base-model', default='LSTM', help='base recurrent model, must be one of DialogRNN/LSTM/GRU')  
+    parser.add_argument('--base-model', default='GRU', help='base recurrent model, must be one of DialogRNN/LSTM/GRU')  
 
     parser.add_argument('--graph-model', action='store_true', default=True, help='whether to use graph model after recurrent encoding')
 
@@ -216,9 +216,9 @@ if __name__ == '__main__':
     
     parser.add_argument('--dropout', type=float, default=0.5, metavar='dropout', help='dropout rate')
     
-    parser.add_argument('--batch-size', type=int, default=32, metavar='BS', help='batch size')
+    parser.add_argument('--batch-size', type=int, default=16, metavar='BS', help='batch size')
     
-    parser.add_argument('--epochs', type=int, default=60, metavar='E', help='number of epochs')
+    parser.add_argument('--epochs', type=int, default=30, metavar='E', help='number of epochs')
     
     parser.add_argument('--class-weight', action='store_true', default=True, help='use class weights')  
     
@@ -228,7 +228,7 @@ if __name__ == '__main__':
     
     parser.add_argument('--tensorboard', action='store_true', default=False, help='Enables tensorboard log')
 
-    parser.add_argument('--graph_type', default='relation', help='relation/GCN3/DeepGCN/MMGCN/MMGCN2')  
+    parser.add_argument('--graph_type', default='hyper', help='relation/GCN3/DeepGCN/MMGCN/MMGCN2')  
 
     parser.add_argument('--use_topic', action='store_true', default=False, help='whether to use topic information') 
 
@@ -236,15 +236,15 @@ if __name__ == '__main__':
 
     parser.add_argument('--multiheads', type=int, default=6, help='multiheads') 
 
-    parser.add_argument('--graph_construct', default='full', help='single/window/fc for MMGCN2; direct/full for others') 
+    parser.add_argument('--graph_construct', default='direct', help='single/window/fc for MMGCN2; direct/full for others') 
 
     parser.add_argument('--use_gcn', action='store_true', default=False, help='whether to combine spectral and none-spectral methods or not')  
 
     parser.add_argument('--use_residue', action='store_true', default=False, help='whether to use residue information or not')
 
-    parser.add_argument('--multi_modal', action='store_true', default=False, help='whether to use multimodal information') 
+    parser.add_argument('--multi_modal', action='store_true', default=True, help='whether to use multimodal information') 
 
-    parser.add_argument('--mm_fusion_mthd', default='concat', help='method to use multimodal information: concat, gated, concat_subsequently')
+    parser.add_argument('--mm_fusion_mthd', default='concat_DHT', help='method to use multimodal information: concat, gated, concat_subsequently')
 
     parser.add_argument('--modals', default='avl', help='modals to fusion')  
 
@@ -258,13 +258,13 @@ if __name__ == '__main__':
 
     parser.add_argument('--use_modal', action='store_true', default=False, help='whether to use modal embedding') 
 
-    parser.add_argument('--norm', default='LN2', help='NORM type')  
+    parser.add_argument('--norm', default='BN', help='NORM type')  
 
     parser.add_argument('--testing', action='store_true', default=False, help='testing') 
 
     parser.add_argument('--num_L', type=int, default=3, help='num_hyperconvs') 
 
-    parser.add_argument('--num_K', type=int, default=4, help='num_convs')
+    parser.add_argument('--num_K', type=int, default=0, help='num_convs')
 
     parser.add_argument('--subject', type=int, default=1, help='subject id')  
 
